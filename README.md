@@ -27,6 +27,8 @@ Please use the following bibtex entry, if you consider to cite this implementati
   title={Parallel DIRECT-type algorithms for generally constrained global optimization problems in MATLAB},
   author={Stripinis, Linas},
   year={2020},
+  publisher = {GitHub},
+  journal = {GitHub repository},
   howpublished={\url{https://github.com/blockchain-group/pDIRECT-GLce}},
 }
 ```
