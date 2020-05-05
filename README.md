@@ -1,8 +1,6 @@
-# pDIRECT-GLce
+# Parallel DIRECT-GLce implementations
 Parallel DIRECT-type algorithms for generally constrained global optimization problems
 
-
-# Parallel DIRECT-GLce approaches
 The code in this repository is based on the works in [[1]](#1)[[2]](#2) and is written in MATLAB.
 
 ## Getting started
