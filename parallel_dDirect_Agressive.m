@@ -4,7 +4,6 @@ function [ret_minval, final_xatmin, history] = parallel_dDirect_Agressive...
 % Function   : parallel_dDirect_Agressive
 % Author 1   : Linas Stripinis          (linas.stripinis@mif.vu.lt)
 % Author 2   : Remigijus Paualvicius    (remigijus.paulavicius@mif.vu.lt)
-% Author 3   : Julius Zilinskas         (julius.zilinskas@mif.vu.lt)
 % Created on : 04/19/2020
 % Purpose    : DIRECT optimization algorithm for box constraints.
 %--------------------------------------------------------------------------
@@ -60,8 +59,10 @@ function [ret_minval, final_xatmin, history] = parallel_dDirect_Agressive...
 %--------------------------------------------------------------------------
 
 % Get options
+if nargin < 3
+    opts = [];
+end
 SS = Options(opts, nargout);
-
 spmd                              % Execute code in parallel on labs
 %--------------------------------------------------------------------------
     for i = 1:10000
@@ -71,20 +72,20 @@ spmd                              % Execute code in parallel on labs
             labReceive(1);
         end         
     end
+    
     % Alocate sets and create initial variables
     [MV, MSS, CE, third, VAL, SS] = Alocate(bounds, SS);
     
     if labindex == 1 
-        [MV, MSS, CE, DT, VAL, SS] = Initialization(Problem, MV,...
-            MSS, CE, VAL, SS);
+        [MV, MSS, CE, DT, VAL, SS, fmin, xmin] = Initialization(Problem,...
+            MV, MSS, CE, VAL, SS);
     else        
         DT = labReceive(1);
     end
     while VAL.perror > SS.TOL       % Main loop
-        [MSS, CE, MV, xmin, fmin, DT] = subdivision(VAL, Problem,...
-            DT, MSS, CE, third, MV);
+        [MSS, CE, MV, DT] = subdivision(VAL, Problem, DT, MSS, CE, third, MV);
         if labindex == 1            % Gather information from workers
-            [DT, fmin, VAL, SS, xmin] = Master(VAL, SS, DT);
+            [DT, fmin, VAL, SS, xmin] = Master(VAL, SS, DT, MSS);
         else                        % Receive information from master
             [DT, ~, TAG] = labReceive(1); 
             if TAG == 1
@@ -97,7 +98,8 @@ end                                 % End of SPMD block
 ret_minval      = fmin{1};          % Return value
 final_xatmin    = xmin{1};       	% Return point
 TT              = SS{1};
-history         = TT.history;       % Return history
+VAL             = VAL{1};
+history         = TT.history(1:(VAL.itctr - 1), 1:4); % Return history
 %--------------------------------------------------------------------------
 return
 
@@ -136,26 +138,26 @@ return
 % Function  : BEGIN
 % Purpose   : Create necessary data accessible to all workers
 %--------------------------------------------------------------------------
-function [MV, MSS, CE, third, SS] = Alocate(bounds, SS)
+function [MV, MSS, CE, third, VAL, SS] = Alocate(bounds, SS)
 %--------------------------------------------------------------------------
 % Create Initial values
 tic                                     % Mesure time
 VAL.a = bounds(:, 1);                   % left bound
 VAL.b = bounds(:, 2);                   % right bound
 VAL.n = size(bounds, 1);                % dimension
-SS.MAXdeep = SS.MAXdeep*VAL.n;
+VAL.aloc = 10*VAL.n*SS.MAXdeep;
 VAL.count = 1;
 VAL.perror = 2*SS.TOL;                  % initial perror
-CE = zeros(1, VAL.n*SS.MAXdeep);        % collum counter
+CE = zeros(1, VAL.aloc);        % collum counter
 
 % Create and allocating empty sets
-MV = nan(3,SS.MAXdeep);                 % for min values in collums
+MV = nan(3, VAL.aloc);                 % for min values in collums
 MSS = struct('F', zeros(1), 'E', zeros(1), 'C', zeros(VAL.n, 1),...
     'L', zeros(VAL.n, 1));
 
-third           = zeros(1, SS.MAXdeep);     % delta values
+third           = zeros(1, VAL.aloc);     % delta values
 third(1)        = 1/3;                      % first delta
-for i = 2:SS.MAXdeep                        % all delta
+for i = 2:VAL.aloc                       % all delta
     third(i)    = (1/3)*third(i - 1);
 end
 %--------------------------------------------------------------------------
@@ -165,11 +167,11 @@ return
 % Function  : Initialization
 % Purpose   : Create necessary data for master
 %--------------------------------------------------------------------------
-function [MV, MSS, CE, DATA, VAL, SS] = Initialization(Problem, MV,...
-    MSS, CE, VAL, SS)
+function [MV, MSS, CE, DATA, VAL, SS, fmin, xmin] = Initialization(...
+    Problem, MV, MSS, CE, VAL, SS)
 %--------------------------------------------------------------------------
 % Create and allocating empty sets
-SS.history = zeros(SS.MAXdeep, 4);              % allocating history
+SS.history = zeros(SS.MAXits, 4);              % allocating history
 MV(1:3,1) = deal(1);                            % first fake value
 MSV = ones(4, 1);
 VAL.fcount = 1;                                 % first fcnc counter
@@ -181,7 +183,8 @@ CE(1) = 1;                                      % \# in column.
 MSS(1).L(:, 1) = zeros(VAL.n,1);                % Lengths
 MSS(1).C(:, 1) = ones(VAL.n,1)/2;               % Center point
 MSS(1).E(1) = 1;                                % Index
-MSS(1).F(1) = feval(Problem.f, abs(VAL.b-VAL.a).*MSS(1).C(:, 1) + VAL.a);                     
+[point, xmin] = deal(abs(VAL.b-VAL.a).*MSS(1).C(:, 1) + VAL.a);
+[MSS(1).F(1), fmin] = deal(feval(Problem.f, point));                   
 
 xatmin      = MSS(1).C(:, 1);                       % minima point
 
@@ -199,8 +202,8 @@ return
 % Function  : subdivision
 % Purpose   : Calculate; new points, function values, lengths and indexes
 %--------------------------------------------------------------------------
-function [MSS, CE, MV, xmin, fmin, DATA] = subdivision(VAL, Problem,...
-    DT, MSS, CE, third, MV)
+function [MSS, CE, MV, DATA] = subdivision(VAL, Problem, DT, MSS, CE,...
+    third, MV)
 %--------------------------------------------------------------------------
 % Create sets
 excess = find(~cellfun(@isempty, DT{2}));       % excess work on Workers
@@ -436,7 +439,7 @@ return
 % Function  : Master
 % Purpose   : last calculs of master
 %--------------------------------------------------------------------------
-function [DATA, fmin, VAL, SS, xmin] = Master(VAL, SS, D)
+function [DATA, fmin, VAL, SS, xmin] = Master(VAL, SS, D, MSS)
 %--------------------------------------------------------------------------
 % Block any action until all workers reach this point
 [count, LB, MN, ME]  = deal(ones(1, SS.workers));
@@ -473,7 +476,7 @@ end
 % Update f_min and x_min
 fmin = min(MN);                         % f_min
 fminindex = ME == max(ME(MN == fmin));
-xmin = XR(:, fminindex);
+xmin = abs(VAL.b-VAL.a).*XR(:, fminindex) + VAL.a;
 
 POH_G = find(~isnan(MSV(1, :)));
 [KK, TT, I, DEL, fcnc] = DIVas(POH_G, VAL, MSV, SS);
@@ -511,7 +514,7 @@ if VAL.fcount > SS.MAXevals
     disp('Exceeded max fcn evals. Increase maxevals'); VAL.perror = -1;
 end
 % Have we exceeded max deep?
-if SS.MAXdeep <= VAL.count + VAL.n
+if max(MSS(end).L(1)) > SS.MAXdeep
     disp('Exceeded Max depth. Increse maxdeep'); VAL.perror = -1;
 end
 if VAL.perror == -1
